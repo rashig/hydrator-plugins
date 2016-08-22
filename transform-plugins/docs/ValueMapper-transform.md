@@ -1,4 +1,4 @@
-# ValueMapper Transform
+# Value Mapper Transform
 
 
 Description
@@ -29,7 +29,7 @@ Properties
 **mapping:** A comma-separated list that defines the mapping of a source
 field to a target field and the mapping table name for looking up values.
 Contains three properties separated by a colon (":") as the source field, the
-mapping table name, and the target field (Macro-enabled):
+mapping table name, and the target field:
 
          <source-field>:<mapping-table-name>:<target-field>
 
@@ -39,7 +39,7 @@ Note: **source field** supports only STRING types.
 source field and its default value for cases where the source field
 value is either null or empty or if the mapping key-value is not present. If
 a default value has not been provided, the source field value will be
-mapped to the target field. Only STRING NULLABLE type values are accepted. (Macro-enabled)
+mapped to the target field. Only STRING NULLABLE type values are accepted.
 Example: <source field>:<defaultValue>
 
 
@@ -63,6 +63,7 @@ The plugin JSON Representation will be:
 If the transform receives as an input record:
 
 First Row:
+
     +=========================================================+
     | field name | type                | value                |
     +=========================================================+
@@ -73,6 +74,7 @@ First Row:
     +=========================================================+
 
 Second Row:
+
     +=========================================================+
     | field name | type                | value                |
     +=========================================================+
@@ -98,6 +100,7 @@ After transformation by the ValueMapper plugin, the output will have this struct
 mapping database and default key-value pair:
 
 First Row:
+
     +=========================================================+
     | field name      | type                | value           |
     +=========================================================+
@@ -108,6 +111,7 @@ First Row:
     +=========================================================+
 
 Second Row:
+
     +=============================================================+
     | field name      | type                | value               |
     +=============================================================+
