@@ -19,10 +19,11 @@ import co.cask.cdap.api.data.format.StructuredRecord;
 import co.cask.cdap.api.data.schema.Schema;
 import co.cask.cdap.etl.api.Emitter;
 import com.google.common.base.Charsets;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.io.Closeables;
 import com.google.common.util.concurrent.AbstractExecutionThreadService;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.slf4j.Logger;
@@ -53,20 +54,18 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
   private final String executable;
   private final String[] args;
   private final BlockingQueue<Event> eventQueue;
-  // private final SynchronousQueue<Event> eventQueue;
-  //  List<ListenableFuture<String>> completions = Lists.newLinkedList();
+  // private List<ListenableFuture<String>> completions = Lists.newLinkedList();
   private ExecutorService executor;
   private Process process;
   private Thread shutdownThread;
   private List<String> outputList = new ArrayList<>();
-
+  private List<String> errorList = new ArrayList<>();
 
   ExternalProgramExecutor(String name, String executable, String... args) {
     this.name = name;
     this.executable = executable;
     this.args = args;
     this.eventQueue = new LinkedBlockingQueue<Event>();
-    //this.eventQueue = new SynchronousQueue<Event>();
   }
 
   /**
@@ -79,17 +78,20 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
     this.executable = other.executable;
     this.args = other.args;
     this.eventQueue = new LinkedBlockingQueue<Event>();
-    // this.eventQueue = new SynchronousQueue<Event>();
   }
 
   void submit(String line, SettableFuture<String> completion, Emitter<StructuredRecord> emitter,
               StructuredRecord structuredRecord, Schema outputSchema) {
     System.out.println("calling submit");
-    Preconditions.checkState(isRunning(), "External program {} is not running.", this);
+    List<ListenableFuture<String>> completions = Lists.newLinkedList();
+    // Preconditions.checkState(isRunning(), "External program {} is not running.", this);
     try {
       eventQueue.put(new Event(line, completion));
+      completions.add(completion);
+      Futures.successfulAsList(completions).get();
+
+      //process the output
       for (String output : outputList) {
-        System.out.println("Calling from submit " + output);
         StructuredRecord.Builder builder = StructuredRecord.builder(outputSchema);
         for (Schema.Field field : outputSchema.getFields()) {
           if (structuredRecord.getSchema().getField(field.getName()) != null) {
@@ -103,12 +105,21 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
           }
         }
         emitter.emit(builder.build());
+        outputList.clear();
       }
+
+      /*for (String error : errorList) {
+        LOG.error(error);
+        emitter.emitError(new InvalidEntry<StructuredRecord>(31, error, structuredRecord));
+        errorList.clear();
+      }*/
 
     } catch (Exception e) {
       completion.setException(e);
+    } finally {
+      System.out.println("End of submit");
     }
-    System.out.println("End of submit");
+
   }
 
   @Override
@@ -121,7 +132,6 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
     // We need two threads.
     // One thread for keep reading from input, write to process stdout and read from stdin.
     // The other for keep reading stderr and log.
-    System.out.println("Entered startup");
     executor = Executors.newFixedThreadPool(2, new ThreadFactoryBuilder()
       .setDaemon(true).setNameFormat("process-" + name + "-%d").build());
 
@@ -132,7 +142,6 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
 
     executor.execute(createProcessRunnable(process));
     executor.execute(createLogRunnable(process));
-    System.out.println("Exit startup");
   }
 
   @Override
@@ -140,12 +149,10 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
     // Simply wait for the process to complete.
     // Trigger shutdown would trigger closing of in/out streams of the process,
     // which if the process implemented correctly, should complete.
-    System.out.println("enterd run");
     int exitCode = process.waitFor();
     if (exitCode != 0) {
       LOG.error("Process {} exit with exit code {}", this, exitCode);
     }
-    System.out.println("exit run");
   }
 
   @Override
@@ -183,7 +190,6 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
         }
       }
     };
-
     t.setDaemon(true);
     return t;
   }
@@ -193,8 +199,9 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
       @Override
       public void run() {
         System.out.println("Entered process runnable");
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), Charsets.UTF_8));;
-        PrintWriter writer = new PrintWriter(new OutputStreamWriter(process.getOutputStream(), Charsets.UTF_8), true);;
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), Charsets.UTF_8));
+        PrintWriter writer = new PrintWriter(new OutputStreamWriter(process.getOutputStream(), Charsets.UTF_8), true);
+
         try {
           while (!Thread.currentThread().isInterrupted()) {
             Event event = eventQueue.take();
@@ -202,7 +209,6 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
               writer.println(event.getLine());
               String line = reader.readLine();
               outputList.add(line);
-              System.out.println("printing from runnable " + line);
               event.getCompletion().set(line);
             } catch (IOException e) {
               LOG.error("Exception when sending events to {}. Event: {}.",
@@ -215,8 +221,8 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
         } finally {
           Closeables.closeQuietly(writer);
           Closeables.closeQuietly(reader);
+          System.out.println("Exit process runnable");
         }
-        System.out.println("Exit process runnable");
       }
     };
   }
@@ -229,17 +235,19 @@ final class ExternalProgramExecutor extends AbstractExecutionThreadService {
         BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream(), Charsets.UTF_8));
         try {
           String line = reader.readLine();
+          System.out.println("Error is " + line);
           while (!Thread.currentThread().isInterrupted() && line != null) {
+            System.out.println("Entered in log loop");
             LOG.info(line);
+            errorList.add(line);
             line = reader.readLine();
-            System.out.println("Error is " + line);
           }
         } catch (IOException e) {
           LOG.error("Exception when reading from stderr stream for {}.", ExternalProgramExecutor.this);
         } finally {
           Closeables.closeQuietly(reader);
+          System.out.println("Exit log runnable");
         }
-        System.out.println("Exit log runnable");
       }
     };
   }

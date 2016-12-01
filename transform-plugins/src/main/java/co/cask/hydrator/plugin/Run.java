@@ -83,8 +83,6 @@ public class Run extends Transform<StructuredRecord, StructuredRecord> {
 
     if (!Strings.isNullOrEmpty(config.fieldsToProcess)) {
       for (String inputField : Splitter.on(',').trimResults().split(config.fieldsToProcess)) {
-       // executableCommand.append("");
-
         Schema inputFieldSchema = structuredRecord.getSchema().getField(inputField).getSchema();
         Schema.Type inputFieldType = inputFieldSchema.isNullable() ? inputFieldSchema.getNonNullable().getType() :
           inputFieldSchema.getType();
@@ -110,14 +108,14 @@ public class Run extends Transform<StructuredRecord, StructuredRecord> {
 
     //for each structured record
     SettableFuture<String> completion = SettableFuture.create();
+    System.out.println("Calling sbmit from transform");
     executor.submit(executableCommand.toString(), completion, emitter, structuredRecord, outputSchema);
   }
 
   @Override
   public void destroy() {
-   // LOG.error("Calling destroy");
- //   executor.stopAndWait();
-
+    // LOG.error("Calling destroy");
+    executor.triggerShutdown();
   }
 
   /**
